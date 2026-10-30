@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"dns_tools/common"
 	"dns_tools/config"
+	"dns_tools/logging"
 	tcpscanner "dns_tools/scanner/tcp"
 	udpscanner "dns_tools/scanner/udp"
 	"encoding/json"
@@ -121,18 +122,6 @@ type TcpScanner struct {
 func (s *TcpScanner) Setup() *TcpScanner {
 	tcps := &s.tcps
 
-	config.Cfg.Pkts_per_sec = 1000
-	config.Cfg.Iface_name = "enp7s0"
-	config.Cfg.Iface_ip = "192.168.188.85"
-	config.Cfg.Iface_ip6 = "2a00:fda0:2b2:3000:e1d2:603d:9600:ac1a"
-	config.Cfg.Dst_port = 53
-	config.Cfg.Dnssec_enabled = false
-	config.Cfg.Log_dnsrecs = false
-	config.Cfg.EDNS0_enabled = true
-	config.Cfg.Verbosity = 6
-	config.Cfg.Port_min = 61440
-	config.Cfg.Port_max = 65535
-	config.Cfg.Verbosity = 4
 	tcps.Scanner_init()
 	tcps.Sender_init()
 	tcps.L2_sender = &tcps.L2_v4
@@ -192,19 +181,6 @@ type UdpScanner struct {
 func (s *UdpScanner) Setup() *UdpScanner {
 
 	udps := &s.udps
-	config.Cfg.Pkts_per_sec = 10
-	config.Cfg.Iface_name = "enp7s0"
-	config.Cfg.Iface_ip = "192.168.188.85"
-	config.Cfg.Iface_ip6 = "2a00:fda0:29e:e000:1c86:ba19:3af3:21e6"
-	config.Cfg.Dst_port = 53
-	config.Cfg.Dnssec_enabled = false
-	config.Cfg.Log_dnsrecs = false
-	config.Cfg.EDNS0_enabled = true
-	config.Cfg.Port_min = 61440
-	config.Cfg.Port_max = 65535
-	config.Cfg.EDNS0_buffer_size = 4096
-	config.Cfg.Dns_query_type = "TXT"
-	// config.Cfg.Verbosity = 6
 
 	udps.Scanner_init_internal()
 	udps.Sender_init()
@@ -410,6 +386,7 @@ func dnsQuery(domain string, server string, qType uint16, timeout time.Duration,
 }
 
 func dnsQueryRoutine(tokenDepth int, resolver InputFileFormat, timeout time.Duration, retryTimeout time.Duration, qType uint16, ch chan<- QueryResult, wg *sync.WaitGroup, induction bool, qmin_mode bool, tcpscan *TcpScanner, udpscan *UdpScanner) {
+	logging.Println(6, nil, "starting routine")
 	server := resolver.Queried_ip
 	defer wg.Done()
 	requestedDomain := domainAssembly(server, tokenDepth, induction, qmin_mode, false)
@@ -667,6 +644,21 @@ func (scan *QMinScanner) Start_scan(inArg []string, inputIsResolver bool) {
 
 	baseDomain = Cfg.BaseURL
 	randMax = Cfg.RandMax
+
+	config.Cfg.Pkts_per_sec = Cfg.Pkts_per_sec
+	config.Cfg.Iface_name = Cfg.Iface_name
+	config.Cfg.Iface_ip = Cfg.Iface_ip
+	config.Cfg.Iface_ip6 = Cfg.Iface_ip6
+	config.Cfg.Dst_port = uint16(Cfg.Port)
+	config.Cfg.Dnssec_enabled = Cfg.Dnssec_enabled
+	config.Cfg.Log_dnsrecs = Cfg.Log_dnsrecs
+	config.Cfg.EDNS0_enabled = Cfg.EDNS0_enabled
+	config.Cfg.Port_min = Cfg.Port_min
+	config.Cfg.Port_max = Cfg.Port_max
+	config.Cfg.EDNS0_buffer_size = Cfg.EDNS0_buffer_size
+	config.Cfg.Dns_query_type = Cfg.Dns_query_type
+	config.Cfg.Verbosity = Cfg.Verbosity
+	fmt.Println(Cfg.Pkts_per_sec, config.Cfg.Pkts_per_sec)
 
 	// get permission of output directory to pass them down
 	dirStat, err := os.Stat(Cfg.OutputDir)

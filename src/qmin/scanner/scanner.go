@@ -214,7 +214,7 @@ func (s *UdpScanner) Resolve(domain string, target net.IP, qType uint16, timeout
 	if config.Cfg.Pkts_per_sec > 0 {
 		_ = s.udps.Send_limiter.Take()
 	}
-	done := make(chan *udpscanner.Udp_scan_data_item)
+	done := make(chan *udpscanner.Udp_scan_data_item, 1)
 	s.udps.Send_dns(id, target, layers.UDPPort(src_port), dns_id, domain, done)
 
 	select {
@@ -451,20 +451,7 @@ func nxOptiRoutine(resolver InputFileFormat, timeout time.Duration, retryTimeout
 	ch <- res2
 }
 
-func scanResolvers(resolver []InputFileFormat, tempFile *TempStore, tokenDepth int, rounds int, timeout time.Duration, retryTrimeout time.Duration, fileName string) {
-
-	var tcpscan *TcpScanner
-	var udpscan *UdpScanner
-
-	if Cfg.Protocol == "tcp" {
-		tcpscan = &TcpScanner{}
-		tcpscan.Setup()
-	}
-	if Cfg.Protocol == "udp" {
-		udpscan = &UdpScanner{}
-		udpscan.Setup()
-	}
-
+func scanResolvers(resolver []InputFileFormat, tempFile *TempStore, tokenDepth int, rounds int, timeout time.Duration, retryTrimeout time.Duration, fileName string, tcpscan *TcpScanner, udpscan *UdpScanner) {
 	for i := 0; i < rounds; i++ {
 		fmt.Println("round", i+1, "/", rounds)
 		ch := make(chan QueryResult)
@@ -476,13 +463,13 @@ func scanResolvers(resolver []InputFileFormat, tempFile *TempStore, tokenDepth i
 				continue
 			}
 			wg.Add(1)
-			go dnsQueryRoutine(tokenDepth, res, timeout, retryTrimeout, dns.TypeTXT, ch, &wg, false, false, tcpscan, udpscan) /*
-				wg.Add(1)
-				go dnsQueryRoutine(tokenDepth, res, timeout, retryTrimeout, dns.TypeTXT, ch, &wg, true, false)
-				wg.Add(1)
-				go dnsQueryRoutine(tokenDepth, res, timeout, retryTrimeout, dns.TypeTXT, ch, &wg, false, true)
-				wg.Add(1)
-				go nxOptiRoutine(res, timeout, retryTrimeout, dns.TypeTXT, ch, &wg)*/
+			go dnsQueryRoutine(tokenDepth, res, timeout, retryTrimeout, dns.TypeTXT, ch, &wg, false, false, tcpscan, udpscan)
+			wg.Add(1)
+			go dnsQueryRoutine(tokenDepth, res, timeout, retryTrimeout, dns.TypeTXT, ch, &wg, true, false, tcpscan, udpscan)
+			wg.Add(1)
+			go dnsQueryRoutine(tokenDepth, res, timeout, retryTrimeout, dns.TypeTXT, ch, &wg, false, true, tcpscan, udpscan)
+			wg.Add(1)
+			go nxOptiRoutine(res, timeout, retryTrimeout, dns.TypeTXT, ch, &wg, tcpscan, udpscan)
 		}
 		go func() {
 			wg.Wait()
@@ -506,12 +493,6 @@ func scanResolvers(resolver []InputFileFormat, tempFile *TempStore, tokenDepth i
 			tempFile.WriteSingle(resLine)
 		}
 	}
-	if tcpscan != nil {
-		tcpscan.Teardown()
-	}
-	if udpscan != nil {
-		udpscan.Teardown()
-	}
 }
 
 func readInputAndScan(inputPath string, batchSize int, fileName string) (*TempStore, error) {
@@ -529,6 +510,27 @@ func readInputAndScan(inputPath string, batchSize int, fileName string) (*TempSt
 	reader := parquet.NewGenericReader[InputFileFormat](inputFile)
 	defer reader.Close()
 
+	var tcpscan *TcpScanner
+	var udpscan *UdpScanner
+
+	if Cfg.Protocol == "tcp" {
+		tcpscan = &TcpScanner{}
+		tcpscan.Setup()
+	}
+	if Cfg.Protocol == "udp" {
+		udpscan = &UdpScanner{}
+		udpscan.Setup()
+	}
+
+	defer func() {
+		if tcpscan != nil {
+			tcpscan.Teardown()
+		}
+		if udpscan != nil {
+			udpscan.Teardown()
+		}
+	}()
+
 	partIndex := 1
 	numParts := math.Ceil(float64(reader.NumRows()) / float64(batchSize))
 
@@ -539,7 +541,7 @@ func readInputAndScan(inputPath string, batchSize int, fileName string) (*TempSt
 
 		n, err := reader.Read(rows)
 		if n > 0 {
-			scanResolvers(rows[:n], tempDataFile, Cfg.LabelDepth, Cfg.Rounds, time.Duration(Cfg.Timeout*int(time.Millisecond)), time.Duration(Cfg.RetryTimeout*int(time.Millisecond)), fileName)
+			scanResolvers(rows[:n], tempDataFile, Cfg.LabelDepth, Cfg.Rounds, time.Duration(Cfg.Timeout*int(time.Millisecond)), time.Duration(Cfg.RetryTimeout*int(time.Millisecond)), fileName, tcpscan, udpscan)
 		}
 		if err == io.EOF {
 			break
@@ -567,6 +569,27 @@ func readInputTXTAndScan(inputPath string, batchSize int, fileName string) (*Tem
 	}
 	defer inputFile.Close()
 
+	var tcpscan *TcpScanner
+	var udpscan *UdpScanner
+
+	if Cfg.Protocol == "tcp" {
+		tcpscan = &TcpScanner{}
+		tcpscan.Setup()
+	}
+	if Cfg.Protocol == "udp" {
+		udpscan = &UdpScanner{}
+		udpscan.Setup()
+	}
+
+	defer func() {
+		if tcpscan != nil {
+			tcpscan.Teardown()
+		}
+		if udpscan != nil {
+			udpscan.Teardown()
+		}
+	}()
+
 	scanner := bufio.NewScanner(inputFile)
 	batch := make([]InputFileFormat, 0, batchSize)
 
@@ -576,7 +599,7 @@ func readInputTXTAndScan(inputPath string, batchSize int, fileName string) (*Tem
 		batch = append(batch, InputFileFormat{Queried_ip: t, Resolver_type: ty})
 
 		if len(batch) == batchSize {
-			scanResolvers(batch, tempDataFile, Cfg.LabelDepth, Cfg.Rounds, time.Duration(Cfg.Timeout*int(time.Millisecond)), time.Duration(Cfg.RetryTimeout*int(time.Millisecond)), fileName)
+			scanResolvers(batch, tempDataFile, Cfg.LabelDepth, Cfg.Rounds, time.Duration(Cfg.Timeout*int(time.Millisecond)), time.Duration(Cfg.RetryTimeout*int(time.Millisecond)), fileName, tcpscan, udpscan)
 			batch = batch[:0]
 		}
 	}
@@ -585,7 +608,7 @@ func readInputTXTAndScan(inputPath string, batchSize int, fileName string) (*Tem
 		return nil, fmt.Errorf("error reading file: %w", err)
 	}
 	if len(batch) > 0 {
-		scanResolvers(batch, tempDataFile, Cfg.LabelDepth, Cfg.Rounds, time.Duration(Cfg.Timeout*int(time.Millisecond)), time.Duration(Cfg.RetryTimeout*int(time.Millisecond)), fileName)
+		scanResolvers(batch, tempDataFile, Cfg.LabelDepth, Cfg.Rounds, time.Duration(Cfg.Timeout*int(time.Millisecond)), time.Duration(Cfg.RetryTimeout*int(time.Millisecond)), fileName, tcpscan, udpscan)
 	}
 
 	if err := tempDataFile.Close(); err != nil {
@@ -681,8 +704,30 @@ func (scan *QMinScanner) Start_scan(inArg []string, inputIsResolver bool) {
 		if err != nil {
 			log.Fatalln("Could not create Temporary file: %w", err)
 		}
+
+		var tcpscan *TcpScanner
+		var udpscan *UdpScanner
+
+		if Cfg.Protocol == "tcp" {
+			tcpscan = &TcpScanner{}
+			tcpscan.Setup()
+		}
+		if Cfg.Protocol == "udp" {
+			udpscan = &UdpScanner{}
+			udpscan.Setup()
+		}
+
+		defer func() {
+			if tcpscan != nil {
+				tcpscan.Teardown()
+			}
+			if udpscan != nil {
+				udpscan.Teardown()
+			}
+		}()
+
 		res_type := "Unset"
-		scanResolvers([]InputFileFormat{{Queried_ip: inArg[0], Resolver_type: res_type}}, tempDataFile, Cfg.LabelDepth, Cfg.Rounds, time.Duration(Cfg.Timeout*int(time.Millisecond)), time.Duration(Cfg.RetryTimeout*int(time.Millisecond)), "programArgument")
+		scanResolvers([]InputFileFormat{{Queried_ip: inArg[0], Resolver_type: res_type}}, tempDataFile, Cfg.LabelDepth, Cfg.Rounds, time.Duration(Cfg.Timeout*int(time.Millisecond)), time.Duration(Cfg.RetryTimeout*int(time.Millisecond)), "programArgument", tcpscan, udpscan)
 
 		if err := tempDataFile.Close(); err != nil {
 			log.Println("Temporary file path: %w", tempDataFile.Path())

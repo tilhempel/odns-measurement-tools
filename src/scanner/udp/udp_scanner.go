@@ -177,7 +177,10 @@ func (udps *Udp_scanner) Send_dns(id uint32, dst_ip net.IP, src_port layers.UDPP
 
 func (udps *Udp_scanner) deliver(item *Udp_scan_data_item) {
 	if item.Done != nil {
-		item.Done <- item
+		select {
+		case item.Done <- item:
+		default:
+		}
 		return
 	}
 	var boxed scanner.Scan_data_item = item

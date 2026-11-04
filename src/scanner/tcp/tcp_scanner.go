@@ -402,7 +402,11 @@ func (tcps *Tcp_scanner) Handle_pkt(ip gopacket.NetworkLayer, pkt gopacket.Packe
 
 func (tcps *Tcp_scanner) deliver(item *Tcp_scan_data_item) {
 	if item.Done != nil {
-		item.Done <- item
+		select {
+		case item.Done <- item:
+		default:
+		}
+		delete(tcps.Scan_data.Items, tcp_scan_item_key{item.Port})
 		return
 	}
 	var boxed scanner.Scan_data_item = item
